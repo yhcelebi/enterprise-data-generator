@@ -1,0 +1,60 @@
+name: Generate dataset
+
+# Run from the Actions tab. One job per company runs in parallel; each job uploads its
+# own Parquet files to the Hugging Face dataset repository given below.
+on:
+  workflow_dispatch:
+    inputs:
+      scale:
+        description: Size multiplier (1.0 = full set)
+        default: "1.0"
+      first_year:
+        description: First year of data
+        default: "1995"
+      hf_repo:
+        description: Hugging Face dataset repository (owner/name)
+        required: true
+      private:
+        description: Keep the dataset private
+        type: boolean
+        default: true
+
+jobs:
+  shared:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt huggingface_hub
+      - run: python -m edg --companies none --shared --first-year ${{ inputs.first_year }} --out out
+      - run: python scripts/upload_hf.py out ${{ inputs.hf_repo }} ${{ inputs.private && '--private' || '' }}
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+
+  company:
+    needs: shared
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        company: [ostim, kestrel, anatolia, pennine, bosphorus, alpenhof, cinar, brightmart, sifa, helix,
+                  ufuk, meridian, poyraz, solenne, bilge, cobalt, temel, granite, marmara, rheinwerk,
+                  kalkan, ironclad, telekent, aurore, kanat, albion, hayat, northbridge]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt huggingface_hub
+      - name: Generate
+        run: python -m edg --companies ${{ matrix.company }} --scale ${{ inputs.scale }} --first-year ${{ inputs.first_year }} --out out
+      - name: Validate
+        run: python scripts/validate.py out ${{ matrix.company }}
+      - name: Upload
+        run: python scripts/upload_hf.py out ${{ inputs.hf_repo }} ${{ inputs.private && '--private' || '' }}
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
