@@ -23,8 +23,8 @@ jobs:
   shared:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
       - run: pip install -r requirements.txt huggingface_hub
@@ -45,8 +45,8 @@ jobs:
                   ufuk, meridian, poyraz, solenne, bilge, cobalt, temel, granite, marmara, rheinwerk,
                   kalkan, ironclad, telekent, aurore, kanat, albion, hayat, northbridge]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
       - run: pip install -r requirements.txt huggingface_hub
