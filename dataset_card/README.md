@@ -102,7 +102,7 @@ configs:
 # Enterprise Data — 30 Companies, 1995–2026
 
 A large, **fully synthetic and fully reconciled** enterprise dataset: the books and operations of **30 fictional
-companies** over **31¾ years** (January 1995 – September 2026), in about **60 GB of Parquet** and roughly ten
+companies** over **31¾ years** (January 1995 – September 2026), in about **48 GB of Parquet** and about 9.3
 billion rows.
 
 Every company is a complete enterprise, with a general ledger, a monthly trial balance (mizan), invoices, payments,
@@ -127,7 +127,7 @@ in the Turkish uniform chart of accounts (TDHP), so the core finance tables foll
 | Countries and currencies | Turkey (TRY), United States (USD), United Kingdom (GBP), Germany, Netherlands, Spain, France (EUR) |
 | Charts of accounts | Turkish companies: TDHP with customer and supplier sub-accounts. Foreign companies: IFRS-style, with a TDHP mapping on every row |
 | Tables | ~80, from the general ledger to hourly machine sensors |
-| Size | ~60 GB Parquet (zstd), ~10 billion rows |
+| Size | ~48 GB Parquet (zstd), ~9.3 billion rows |
 | Reconciliation | Every company is checked automatically before upload (see *Guarantees*) |
 
 ## The companies

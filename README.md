@@ -42,7 +42,7 @@ Nothing is random noise on top of a template. Every company is simulated top-dow
 ```bash
 python -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python -m edg --companies ostim,kestrel --scale 0.05 --detail 0.01 --out out --shared   # quick test
-.venv/bin/python -m edg --scale 0.3 --detail 1.0 --out out --shared                             # full set (~60 GB)
+.venv/bin/python -m edg --scale 0.3 --detail 1.0 --out out --shared                             # full set (~48 GB, 9.3B rows)
 .venv/bin/python scripts/validate.py out                                                        # reconciliation checks + KPIs
 .venv/bin/python scripts/check_interco.py out                                                   # trade between companies
 ```
