@@ -9,6 +9,8 @@ Nothing is random noise on top of a template. Every company is simulated top-dow
 3. **Settlement.** Customer payments with realistic delays that worsen in crises, Turkish cheques (received, endorsed, bounced, issued), bad debts moved to doubtful receivables, and FX differences on export receipts.
 4. **Treasury.** Working-capital and investment loans (Turkish companies also borrow in EUR and book FX revaluation), early repayments, deposit interest, VAT returns, provisional and corporate tax, dividends and year-end closing.
 5. **Ledger.** Everything above is posted to a double-entry journal. The trial balance (mizan) and the bank statements are derived from it, so **every table reconciles with every other table**.
+6. **Industry detail.** Operational data behind the finance numbers (POS receipts, subscriber usage, meter readings, flights, patient encounters, shipments, production and machine sensors…). It adds up to the ledger wherever the two overlap.
+7. **Connected economy.** Companies trade with each other: the seller's sales invoice and the buyer's purchase invoice share number, ETTN, date and amount, and both bank statements show the payment on the same day.
 
 ## Companies
 
@@ -39,13 +41,15 @@ Nothing is random noise on top of a template. Every company is simulated top-dow
 
 ```bash
 python -m venv .venv && .venv/bin/pip install -r requirements.txt
-.venv/bin/python -m edg --companies ostim,kestrel --scale 0.1 --out out --shared   # quick test
-.venv/bin/python -m edg --scale 1.0 --out out --shared                              # everything
-.venv/bin/python scripts/validate.py out                                            # reconciliation checks + KPIs
+.venv/bin/python -m edg --companies ostim,kestrel --scale 0.05 --detail 0.01 --out out --shared   # quick test
+.venv/bin/python -m edg --scale 0.3 --detail 1.0 --out out --shared                             # full set (~60 GB)
+.venv/bin/python scripts/validate.py out                                                        # reconciliation checks + KPIs
+.venv/bin/python scripts/check_interco.py out                                                   # trade between companies
 ```
 
 **Command-line options:**
-- `--scale` multiplies company size: revenue, customers, employees and document counts.
+- `--scale` multiplies company size: revenue, customers, employees and document counts. The full demo set uses 0.3.
+- `--detail` multiplies the volume of the industry detail tables. It's 1.0 for the full set, and 0 writes finance tables only.
 - `--first-year` and `--end` shorten the period.
 - `--shared` also writes the tables that are common to all companies.
 - Each company is independent and deterministic for a given `--seed`, so companies can be generated in parallel on different machines.
@@ -88,8 +92,40 @@ select * from read_parquet('out/invoices/*/*.parquet') where company_id = 'ostim
 | `fixed_assets` | Asset register with useful lives, depreciation and disposals |
 | `products` | Product and service catalogue with launch and discontinue dates |
 
+**Industry detail tables:**
+
+| Industry | Tables |
+|---|---|
+| Retail | `stores`, `store_daily_sales`, `pos_receipts`, `pos_receipt_lines`, `loyalty_members` |
+| Telecom | `plans`, `subscriber_base_monthly`, `subscribers`, `subscriber_daily_usage`, `network_cells`, `cell_daily_traffic` |
+| Energy | `weather_daily`, `power_plants`, `plant_hourly_generation`, `market_prices_hourly`, `smart_meters`, `meter_daily_readings` |
+| Airline | `airports`, `aircraft` (owned from the asset register, or leased), `flights`, `tickets` |
+| Healthcare | `facilities`, `physicians`, `patients`, `encounters`, `encounter_diagnoses`, `diagnosis_codes`, `claims`, `facility_daily_census` |
+| Logistics | `depots`, `trucks`, `shipments`, `truck_daily_telemetry`, `truck_gps_pings` |
+| Manufacturing, textiles, food, pharma, automotive, defense | `machines`, `machine_daily_metrics` (with `days_to_failure`), `machine_sensor_hourly`, `maintenance_work_orders`, `production_orders`, `stock_monthly`; plus production lots for food and pharma, `vehicles` (valid VINs) and `warranty_claims` for automotive, and `programmes`, `programme_milestones`, `programme_evm_monthly` for defense |
+| Software | `subscriptions`, `product_usage_daily`, `support_tickets` |
+| Construction | `projects`, `project_progress_monthly`, `site_daily_logs` |
+
+The largest detail tables (receipts, subscriber usage, meter readings, GPS pings, hourly sensors and tickets) cover a panel or the most recent years, sized by `--detail`. Each table says which stores, subscribers, flights or years it covers.
+
+## Connected economy
+
+`interco_links` lists who sells to whom, including Kervan Holding's management fees to Anatolia, Bosphorus and Marmara. On every link:
+- the seller has a customer card for the buyer, and the buyer has a supplier card for the seller, spelled differently (for example "Bosphorus Gıda A.Ş." vs "BOSPHORUS GIDA AS");
+- both sides carry the same invoice number, ETTN, date and amount, and payment is booked on the same day in both bank statements;
+- about 2% of invoices are booked by the buyer a few days later, often in the next month, and about 0.3% are never booked by the buyer. Cross-border links (EUR invoices in USD books) add FX differences.
+
 ## Guarantees checked by `scripts/validate.py`
 
 - Every journal entry balances.
 - The trial balance balances for every month.
 - The bank statement's month-end balance equals ledger account 102 for every month.
+- Detail tables add up to the ledger, to the cent:
+  - receipt lines → receipts → store-days → daily consumer sales
+  - flights → daily ticket sales, and tickets → flights
+  - claims → insurer invoices, and self-pay encounters → patient payments
+  - shipments → invoices
+  - stock: opening + produced − sold = closing, with sold equal to invoice lines and produced equal to production orders
+- Sales invoice numbers are unique per company.
+
+`scripts/check_interco.py` checks both sides of every inter-company link: matching invoices, equal amounts and the same payment day.
