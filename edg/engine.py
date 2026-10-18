@@ -1361,7 +1361,7 @@ class CompanySim:
 
     def closing_entries(self):
         """Close income statement accounts at each year end and carry the result to equity."""
-        gl = pd.concat(self.J.parts, ignore_index=True)
+        gl = self.J.frame(sort=False)
         gl = gl[gl.day <= self.last_day]
         pl = gl[gl.account.str[0] == "6"]
         year = self.ext_year[pl.day.values]
@@ -1398,7 +1398,7 @@ class CompanySim:
     def gen_budget(self):
         """Annual budget prepared each December from the year's actuals, phased by month."""
         rng, cal = self.rng, self.cal
-        gl = pd.concat(self.J.parts, ignore_index=True)
+        gl = self.J.frame(sort=False)
         gl = gl[(gl.day <= self.last_day) & (gl.doc_type != "closing")]
         m = self.dm[gl.day.values]
         acc2 = gl.account.str[:2]

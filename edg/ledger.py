@@ -66,22 +66,46 @@ def chart_table() -> pd.DataFrame:
 
 
 class Journal:
-    """Collects journal lines in vectorized batches.
+    """Collects journal lines in vectorized batches of plain numpy arrays.
 
-    Every call posts complete, balanced entries. Dates are integer day indexes from the
-    calendar start; rows dated after the calendar end are dropped (not yet happened).
+    Accounts and document types are stored as integer codes so that filtering by
+    account prefix stays fast. Every call posts complete, balanced entries. Dates are
+    integer day indexes from the calendar start; rows dated after the calendar end are
+    dropped when the journal is read (they have not happened yet).
     """
+
+    FIELDS = ("entry", "line", "day", "acct", "debit", "credit", "doc_type", "doc_no", "description",
+              "cp_code", "cp_name")
 
     def __init__(self, last_day: int):
         self.parts = []
         self.next_entry = 0
         self.last_day = last_day
+        self.codes = {}       # account string -> id
+        self.accounts = []    # id -> account string
+        self.types = {}
+        self.type_names = []
+
+    def _code(self, value, table, names, n):
+        if np.ndim(value) == 0:
+            if value not in table:
+                table[value] = len(names)
+                names.append(value)
+            return np.full(n, table[value], dtype=np.int32)
+        uniq, inv = np.unique(np.asarray(value).astype(str), return_inverse=True)
+        ids = np.empty(len(uniq), dtype=np.int32)
+        for i, u in enumerate(uniq):
+            if u not in table:
+                table[u] = len(names)
+                names.append(u)
+            ids[i] = table[u]
+        return ids[inv]
 
     def entries(self, day, lines, doc_type, doc_no, desc, cp_code=None, cp_name=None):
         """Post one entry per element of `day`.
 
         `lines` is a list of (account, debit, credit) where each item is a scalar or an
-        array aligned with `day`. Zero lines are dropped at the end.
+        array aligned with `day`. Zero lines are dropped when the journal is read.
         """
         day = np.asarray(day, dtype=np.int64)
         n = len(day)
@@ -90,53 +114,68 @@ class Journal:
         entry = np.arange(n, dtype=np.int64) + self.next_entry
         self.next_entry += n
 
-        def arr(x, dtype=None):
-            if np.ndim(x) == 0:
-                return np.full(n, x, dtype=dtype if dtype else (object if isinstance(x, str) or x is None else float))
-            return np.asarray(x, dtype=dtype) if dtype else np.asarray(x)
+        def obj(x):
+            return np.full(n, x, dtype=object) if np.ndim(x) == 0 else np.asarray(x, dtype=object)
 
-        doc_type_a, doc_no_a, desc_a = arr(doc_type, object), arr(doc_no, object), arr(desc, object)
-        cp_code_a, cp_name_a = arr(cp_code, object), arr(cp_name, object)
+        def num(x):
+            return np.full(n, float(x)) if np.ndim(x) == 0 else np.asarray(x, dtype=float)
+
+        dtype_ids = self._code(doc_type, self.types, self.type_names, n)
+        doc_no_a, desc_a, cp_code_a, cp_name_a = obj(doc_no), obj(desc), obj(cp_code), obj(cp_name)
         for line_no, (acct, dr, cr) in enumerate(lines):
-            self.parts.append(pd.DataFrame({
-                "entry": entry, "line": line_no, "day": day,
-                "account": arr(acct, object),
-                "debit": np.round(arr(dr, float), 2), "credit": np.round(arr(cr, float), 2),
-                "doc_type": doc_type_a, "doc_no": doc_no_a, "description": desc_a,
-                "cp_code": cp_code_a, "cp_name": cp_name_a,
-            }))
+            self.parts.append((entry, np.full(n, line_no, dtype=np.int16), day,
+                               self._code(acct, self.codes, self.accounts, n),
+                               np.round(num(dr), 2), np.round(num(cr), 2), dtype_ids,
+                               doc_no_a, desc_a, cp_code_a, cp_name_a))
 
     def pairs(self, day, amount, dr, cr, doc_type, doc_no, desc, cp_code=None, cp_name=None):
         amount = np.round(np.asarray(amount, dtype=float), 2)
         self.entries(day, [(dr, amount, 0.0), (cr, 0.0, amount)], doc_type, doc_no, desc, cp_code, cp_name)
 
-    def frame(self) -> pd.DataFrame:
-        df = pd.concat(self.parts, ignore_index=True)
-        df = df[(df.day <= self.last_day) & ((df.debit != 0) | (df.credit != 0))]
-        neg = df.debit < 0
-        df.loc[neg, ["debit", "credit"]] = np.c_[np.zeros(neg.sum()), -df.loc[neg, "debit"].values]
-        neg = df.credit < 0
-        df.loc[neg, ["debit", "credit"]] = np.c_[-df.loc[neg, "credit"].values, np.zeros(neg.sum())]
-        return df.sort_values(["day", "entry", "line"], kind="stable").reset_index(drop=True)
+    def frame(self, sort: bool = True) -> pd.DataFrame:
+        cols = [np.concatenate([p[i] for p in self.parts]) for i in range(len(self.FIELDS))]
+        data = dict(zip(self.FIELDS, cols))
+        keep = (data["day"] <= self.last_day) & ((data["debit"] != 0) | (data["credit"] != 0))
+        data = {k: v[keep] for k, v in data.items()}
+        d, c = data["debit"], data["credit"]
+        neg_d, neg_c = d < 0, c < 0
+        d2 = np.where(neg_d, 0.0, d) + np.where(neg_c, -c, 0.0)
+        c2 = np.where(neg_c, 0.0, c) + np.where(neg_d, -d, 0.0)
+        data["debit"], data["credit"] = d2, c2
+        acct_names = np.array(self.accounts, dtype=object)
+        type_names = np.array(self.type_names, dtype=object)
+        df = pd.DataFrame(data)
+        df["account"] = acct_names[df.pop("acct").values]
+        df["doc_type"] = type_names[df.doc_type.values]
+        if sort:
+            order = np.lexsort((df.line.values, df.entry.values, df.day.values))
+            df = df.iloc[order].reset_index(drop=True)
+        return df
+
+    def _mask(self, prefix: str) -> np.ndarray:
+        return np.array([a.startswith(prefix) for a in self.accounts] + [False], dtype=bool)
 
     def account_flows(self, prefix: str, n_days: int) -> np.ndarray:
-        """Daily net debit movement for accounts starting with `prefix` (current batches)."""
+        """Daily net debit movement for accounts starting with `prefix`."""
         out = np.zeros(n_days)
+        mask = self._mask(prefix)
         for p in self.parts:
-            m = p.account.str.startswith(prefix).values & (p.day.values < n_days) & (p.day.values >= 0)
+            day = p[2]
+            m = mask[p[3]] & (day < n_days) & (day >= 0)
             if m.any():
-                np.add.at(out, p.day.values[m], p.debit.values[m] - p.credit.values[m])
+                np.add.at(out, day[m], p[4][m] - p[5][m])
         return out
 
     def pnl_by_month(self, day_month: np.ndarray, n_months: int) -> np.ndarray:
         """Monthly profit before tax (credit minus debit on class 6 except 69)."""
         out = np.zeros(n_months)
         n_days = len(day_month)
+        mask = np.array([a.startswith("6") and not a.startswith("69") for a in self.accounts] + [False])
         for p in self.parts:
-            a = p.account.str
-            m = a.startswith("6").values & ~a.startswith("69").values & (p.day.values < n_days)
+            day = p[2]
+            m = mask[p[3]] & (day < n_days) & (day >= 0)
             if m.any():
-                np.add.at(out, day_month[p.day.values[m]], p.credit.values[m] - p.debit.values[m])
+                np.add.at(out, day_month[day[m]], p[5][m] - p[4][m])
         return out
 
 
