@@ -262,16 +262,24 @@ def shared_tables(first_year: int, end: str) -> dict:
 
 def _to_arrow(df: pd.DataFrame) -> pa.Table:
     df = df.reset_index(drop=True)
+    date_only = set()
     for col in df.columns:
         if df[col].dtype == object:
             vals = df[col].dropna()
             if len(vals) and isinstance(vals.iloc[0], (bool, np.bool_)):
                 df[col] = df[col].astype("boolean")
+            elif len(vals) == 0:
+                df[col] = df[col].astype("string")
+        elif pd.api.types.is_datetime64_any_dtype(df[col].dtype):
+            ns = df[col].values.astype("datetime64[ns]").astype("int64")
+            valid = ~np.isnat(df[col].values)
+            if (ns[valid] % 86_400_000_000_000 == 0).all():
+                date_only.add(col)
     table = pa.Table.from_pandas(df, preserve_index=False)
     fields = []
     for f in table.schema:
         if pa.types.is_timestamp(f.type):
-            fields.append(pa.field(f.name, pa.date32()))
+            fields.append(pa.field(f.name, pa.date32() if f.name in date_only else pa.timestamp("s")))
         else:
             fields.append(f)
     return table.cast(pa.schema(fields))

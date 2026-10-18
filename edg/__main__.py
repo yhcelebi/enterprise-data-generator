@@ -5,6 +5,7 @@ import time
 import zlib
 from pathlib import Path
 
+from . import detail
 from .companies import BY_ID, COMPANIES
 from .engine import CompanySim
 from .output import shared_tables, write_tables
@@ -19,6 +20,7 @@ def main():
     ap.add_argument("--end", default="2026-09-30")
     ap.add_argument("--out", default="out")
     ap.add_argument("--seed", type=int, default=2026)
+    ap.add_argument("--detail", type=float, default=1.0, help="industry detail volume multiplier (0 = finance only)")
     ap.add_argument("--shared", action="store_true", help="also write shared tables (companies, macro, chart)")
     args = ap.parse_args()
 
@@ -39,8 +41,9 @@ def main():
             continue
         t0 = time.time()
         seed = args.seed * 1_000_003 + zlib.crc32(cid.encode())
-        tables = CompanySim(company, cal, args.scale, seed).run()
-        sizes = write_tables(tables, out, cid)
+        sim = CompanySim(company, cal, args.scale, seed)
+        sizes = write_tables(sim.run(), out, cid)
+        sizes.update(detail.generate(sim, out, args.detail))
         rows = sum(r for r, _ in sizes.values())
         mb = sum(s for _, s in sizes.values()) / 1e6
         print(f"{cid}: {rows:,} rows, {mb:,.1f} MB in {time.time() - t0:,.0f}s", flush=True)
