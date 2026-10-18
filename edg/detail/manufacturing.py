@@ -15,7 +15,7 @@ Used by manufacturing, textiles, food, pharma, automotive and defense companies.
 import numpy as np
 import pandas as pd
 
-from . import split_exact, weighted_choice
+from . import blocks, split_exact, weighted_choice
 
 SENSOR_ROW_BUDGET = 160e6
 MACHINE_TYPES = {
@@ -246,19 +246,21 @@ def _machine_metrics(ctx, machines, produced):
             }), year)
         # Hourly sensor readings for the most recent years.
         if year > sim.cal.end.year - years_hourly and year >= 2015:
-            on = np.where(run > 0)[0]
-            hrs = np.minimum(np.ceil(run[on]).astype(int), 24)
-            owner = np.repeat(on, hrs)
-            step = np.arange(len(owner)) - np.repeat(np.cumsum(hrs) - hrs, hrs)
-            ts = sim.dates(day[owner]).astype("datetime64[s]") + ((6 * (~cont) + step) * 3600).astype("timedelta64[s]")
-            nh = len(owner)
-            ctx.w.write("machine_sensor_hourly", pd.DataFrame({
-                "machine_id": machines.machine_id.values[ci[owner]], "timestamp": ts,
-                "temperature_c": np.round(temp[owner] + rng.normal(0, 1.5, nh), 2),
-                "vibration_rms_mm_s": np.round(vib[owner] * rng.lognormal(0, 0.08, nh), 3),
-                "motor_current_a": np.round(rng.normal(42, 4, nh) + 6 * np.exp(-ttf[owner] / 10), 2),
-                "output_units": np.round(output[owner] / np.maximum(hrs[np.searchsorted(on, owner)], 1)),
-            }), year)
+            on_all = np.where(run > 0)[0]
+            hrs_all = np.minimum(np.ceil(run[on_all]).astype(int), 24)
+            for blk in blocks(hrs_all):
+                on, hrs = on_all[blk], hrs_all[blk]
+                owner = np.repeat(on, hrs)
+                step = np.arange(len(owner)) - np.repeat(np.cumsum(hrs) - hrs, hrs)
+                ts = sim.dates(day[owner]).astype("datetime64[s]") + ((6 * (~cont) + step) * 3600).astype("timedelta64[s]")
+                nh = len(owner)
+                ctx.w.write("machine_sensor_hourly", pd.DataFrame({
+                    "machine_id": machines.machine_id.values[ci[owner]], "timestamp": ts,
+                    "temperature_c": np.round(temp[owner] + rng.normal(0, 1.5, nh), 2),
+                    "vibration_rms_mm_s": np.round(vib[owner] * rng.lognormal(0, 0.08, nh), 3),
+                    "motor_current_a": np.round(rng.normal(42, 4, nh) + 6 * np.exp(-ttf[owner] / 10), 2),
+                    "output_units": np.round(output[owner] / np.maximum(np.repeat(hrs, hrs), 1)),
+                }), year)
         ctx.w.close_year(year)
 
 

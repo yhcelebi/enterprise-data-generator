@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 
 from .. import reference as ref
-from . import weighted_choice
+from . import blocks, weighted_choice
 
 METER_ROW_BUDGET = 1000e6
 LATITUDE = {"TR": 39.0, "ES": 40.0}
@@ -185,22 +185,25 @@ def _meters_year(ctx, year, days, weather):
     live = me[me.install_day <= days[-1]]
     if len(live) == 0:
         return
-    start = np.maximum(live.install_day.values, days[0])
-    cnt = days[-1] + 1 - start
-    idx = np.repeat(np.arange(len(live)), cnt)
-    day = np.repeat(start, cnt) + (np.arange(cnt.sum()) - np.repeat(np.cumsum(cnt) - cnt, cnt))
+    start_all = np.maximum(live.install_day.values, days[0])
+    cnt_all = days[-1] + 1 - start_all
     wx = weather.set_index(["city", "day"])
-    key = pd.MultiIndex.from_arrays([live.city.values[idx], day])
-    hdd = wx.hdd.reindex(key).values
-    cdd = wx.cdd.reindex(key).values
-    dow = sim.cal.days.dayofweek.values[day]
-    commercial = live.customer_type.values[idx] == "commercial"
-    base = live.base.values[idx]
-    kwh = base * (1 + live.heat.values[idx] * hdd / 10 + live.cool.values[idx] * cdd / 6) \
-        * np.where(commercial, np.where(dow >= 5, 0.35, 1.1), np.where(dow >= 5, 1.12, 0.96)) * rng.lognormal(0, 0.15, len(day))
-    solar = live.has_solar.values[idx] & (sim.ext_year[day] >= 2019)
-    export = np.where(solar, np.round(rng.uniform(2, 14, len(day)) * (1 - 0.6 * np.minimum(hdd / 12, 1)), 2), 0.0)
-    ctx.w.write("meter_daily_readings", pd.DataFrame({
-        "date": sim.dates(day), "meter_id": live.meter_id.values[idx], "import_kwh": np.round(kwh, 2),
-        "export_kwh": export,
-    }), year)
+    for ent in blocks(cnt_all):
+        cnt = cnt_all[ent]
+        idx = np.repeat(ent, cnt)
+        day = np.repeat(start_all[ent], cnt) + (np.arange(cnt.sum()) - np.repeat(np.cumsum(cnt) - cnt, cnt))
+        key = pd.MultiIndex.from_arrays([live.city.values[idx], day])
+        hdd = wx.hdd.reindex(key).values
+        cdd = wx.cdd.reindex(key).values
+        dow = sim.cal.days.dayofweek.values[day]
+        commercial = live.customer_type.values[idx] == "commercial"
+        base = live.base.values[idx]
+        kwh = base * (1 + live.heat.values[idx] * hdd / 10 + live.cool.values[idx] * cdd / 6) \
+            * np.where(commercial, np.where(dow >= 5, 0.35, 1.1), np.where(dow >= 5, 1.12, 0.96)) \
+            * rng.lognormal(0, 0.15, len(day))
+        solar = live.has_solar.values[idx] & (sim.ext_year[day] >= 2019)
+        export = np.where(solar, np.round(rng.uniform(2, 14, len(day)) * (1 - 0.6 * np.minimum(hdd / 12, 1)), 2), 0.0)
+        ctx.w.write("meter_daily_readings", pd.DataFrame({
+            "date": sim.dates(day), "meter_id": live.meter_id.values[idx], "import_kwh": np.round(kwh, 2),
+            "export_kwh": export,
+        }), year)

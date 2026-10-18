@@ -132,25 +132,56 @@ class Journal:
         amount = np.round(np.asarray(amount, dtype=float), 2)
         self.entries(day, [(dr, amount, 0.0), (cr, 0.0, amount)], doc_type, doc_no, desc, cp_code, cp_name)
 
-    def frame(self, sort: bool = True) -> pd.DataFrame:
-        cols = [np.concatenate([p[i] for p in self.parts]) for i in range(len(self.FIELDS))]
-        data = dict(zip(self.FIELDS, cols))
-        keep = (data["day"] <= self.last_day) & ((data["debit"] != 0) | (data["credit"] != 0))
-        data = {k: v[keep] for k, v in data.items()}
+    def _select(self, keep_part=None, numeric_only=False):
+        """Concatenate the journal (optionally only rows where keep_part(part) is True)."""
+        fields = self.FIELDS[:7] if numeric_only else self.FIELDS
+        idx = [self.FIELDS.index(f) for f in fields]
+        chunks = {f: [] for f in fields}
+        for p in self.parts:
+            day, dr, cr = p[2], p[4], p[5]
+            m = (day <= self.last_day) & ((dr != 0) | (cr != 0))
+            if keep_part is not None:
+                m &= keep_part(p)
+            if not m.any():
+                continue
+            for f, i in zip(fields, idx):
+                chunks[f].append(p[i][m])
+        data = {f: (np.concatenate(v) if v else np.array([])) for f, v in chunks.items()}
         d, c = data["debit"], data["credit"]
         neg_d, neg_c = d < 0, c < 0
-        d2 = np.where(neg_d, 0.0, d) + np.where(neg_c, -c, 0.0)
-        c2 = np.where(neg_c, 0.0, c) + np.where(neg_d, -d, 0.0)
-        data["debit"], data["credit"] = d2, c2
+        data["debit"] = np.where(neg_d, 0.0, d) + np.where(neg_c, -c, 0.0)
+        data["credit"] = np.where(neg_c, 0.0, c) + np.where(neg_d, -d, 0.0)
+        data["entry"] = data["entry"].astype(np.int64)
+        data["day"] = data["day"].astype(np.int32)
+        return data
+
+    def numeric(self) -> pd.DataFrame:
+        """Compact journal: numbers plus account and document type as categoricals."""
+        data = self._select(numeric_only=True)
+        df = pd.DataFrame({k: data[k] for k in ("entry", "line", "day", "debit", "credit")})
+        df["account"] = pd.Categorical.from_codes(data["acct"].astype(np.int32), categories=self.accounts)
+        df["doc_type"] = pd.Categorical.from_codes(data["doc_type"].astype(np.int32), categories=self.type_names)
+        return df
+
+    def frame(self, sort: bool = True, keep_part=None) -> pd.DataFrame:
+        """Full journal with text columns (optionally only some rows, e.g. one year or one account)."""
+        data = self._select(keep_part)
         acct_names = np.array(self.accounts, dtype=object)
         type_names = np.array(self.type_names, dtype=object)
         df = pd.DataFrame(data)
-        df["account"] = acct_names[df.pop("acct").values]
-        df["doc_type"] = type_names[df.doc_type.values]
-        if sort:
+        df["account"] = acct_names[df.pop("acct").values.astype(np.int64)] if len(df) else []
+        df["doc_type"] = type_names[df.doc_type.values.astype(np.int64)] if len(df) else []
+        if sort and len(df):
             order = np.lexsort((df.line.values, df.entry.values, df.day.values))
             df = df.iloc[order].reset_index(drop=True)
         return df
+
+    def year_frame(self, lo: int, hi: int) -> pd.DataFrame:
+        return self.frame(keep_part=lambda p: (p[2] >= lo) & (p[2] <= hi))
+
+    def account_frame(self, account: str) -> pd.DataFrame:
+        code = self.codes.get(account, -1)
+        return self.frame(keep_part=lambda p: p[3] == code)
 
     def _mask(self, prefix: str) -> np.ndarray:
         return np.array([a.startswith(prefix) for a in self.accounts] + [False], dtype=bool)
@@ -184,48 +215,41 @@ def trial_balance(gl: pd.DataFrame, cal, names: dict, foreign: bool) -> pd.DataF
 
     Balance-sheet accounts open each year with last year's closing balance (shown in the
     year-to-date totals, like an opening voucher). Year-end closing entries are left out
-    of December so that the December trial balance is the pre-closing one.
+    of December so that the December trial balance is the pre-closing one. Expects the
+    compact journal from Journal.numeric() (account as a categorical); sums with bincount.
     """
-    g = gl[["day", "account", "debit", "credit", "doc_type"]].copy()
-    g["m"] = cal.day_month[g.day.values]
-    g["year"] = cal.years[g.m.values]
+    codes = gl.account.cat.codes.values.astype(np.int64)
+    cats = np.array(gl.account.cat.categories, dtype=object)
+    n_a, n_m = len(cats), cal.n_months
+    m = np.asarray(cal.day_month)[gl.day.values]
+    years = cal.years
+    y0 = int(years[0])
+    n_y = int(years[-1]) - y0 + 1
+    yi = years[m] - y0
+    closing = (gl.doc_type == "closing").values
+    debit, credit = gl.debit.values, gl.credit.values
+    key = codes * n_m + m
+    deb = np.bincount(key[~closing], weights=debit[~closing], minlength=n_a * n_m).reshape(n_a, n_m)
+    cre = np.bincount(key[~closing], weights=credit[~closing], minlength=n_a * n_m).reshape(n_a, n_m)
+    net_y = np.bincount(codes * n_y + yi, weights=debit - credit, minlength=n_a * n_y).reshape(n_a, n_y)
+    cum_y = np.cumsum(net_y, axis=1)
     first_out = cal.month_index(cal.output_start.strftime("%Y-%m"))
-    closing = g.doc_type.values == "closing"
-
-    mv = g[~closing].groupby(["account", "m"], sort=False)[["debit", "credit"]].sum().reset_index()
-    net_all = g.assign(net=g.debit - g.credit).groupby(["account", "year"])["net"].sum().unstack(fill_value=0.0)
-    cum_by_year_end = net_all.cumsum(axis=1)
-
-    out = []
-    years = sorted(set(cal.years[first_out:]))
-    for y in years:
-        m_lo = max(first_out, int(np.argmax(cal.years == y)))
-        m_hi = int(np.where(cal.years == y)[0][-1])
-        prev_years = [c for c in cum_by_year_end.columns if c < y]
-        opening = cum_by_year_end[prev_years[-1]] if prev_years else pd.Series(0.0, index=cum_by_year_end.index)
-        opening = opening[opening.abs() > 0.004]
-        mv_y = mv[(mv.m >= int(np.argmax(cal.years == y))) & (mv.m <= m_hi)]
-        accounts = sorted(set(opening.index) | set(mv_y.account))
-        months = np.arange(m_lo, m_hi + 1)
-        grid = pd.MultiIndex.from_product([accounts, np.arange(int(np.argmax(cal.years == y)), m_hi + 1)],
-                                          names=["account", "m"])
-        dense = mv_y.set_index(["account", "m"]).reindex(grid, fill_value=0.0)
-        ytd = dense.groupby(level=0).cumsum()
-        ytd = ytd.reset_index()
-        ytd = ytd[ytd.m.isin(months)]
-        month_mv = dense.reset_index()
-        month_mv = month_mv[month_mv.m.isin(months)]
-        op = opening.reindex(ytd.account.values).fillna(0.0).values
-        ytd["month_debit"] = month_mv.debit.values
-        ytd["month_credit"] = month_mv.credit.values
-        ytd["ytd_debit"] = ytd.debit.values + np.where(op > 0, op, 0)
-        ytd["ytd_credit"] = ytd.credit.values + np.where(op < 0, -op, 0)
-        out.append(ytd.drop(columns=["debit", "credit"]))
-    tb = pd.concat(out, ignore_index=True)
-    tb = tb[(tb.ytd_debit.abs() > 0.004) | (tb.ytd_credit.abs() > 0.004)]
+    parts = []
+    for y in sorted(set(years[first_out:])):
+        ms = np.where(years == y)[0]
+        opening = cum_y[:, y - y0 - 1] if y > y0 else np.zeros(n_a)
+        opening = np.where(np.abs(opening) > 0.004, opening, 0.0)
+        ytd_d = np.cumsum(deb[:, ms], axis=1) + np.maximum(opening, 0)[:, None]
+        ytd_c = np.cumsum(cre[:, ms], axis=1) + np.maximum(-opening, 0)[:, None]
+        keep_m = ms >= first_out
+        ai, mi = np.nonzero((np.abs(ytd_d[:, keep_m]) > 0.004) | (np.abs(ytd_c[:, keep_m]) > 0.004))
+        cols = np.where(keep_m)[0][mi]
+        parts.append(pd.DataFrame({"account": cats[ai], "m": ms[cols], "month_debit": deb[ai, ms[cols]],
+                                   "month_credit": cre[ai, ms[cols]], "ytd_debit": ytd_d[ai, cols],
+                                   "ytd_credit": ytd_c[ai, cols]}))
+    tb = pd.concat(parts, ignore_index=True)
     tb["main"] = tb.account.str[:3]
     has_sub = tb.account.str.len() > 3
-
     main = tb.groupby(["main", "m"], sort=False)[["month_debit", "month_credit", "ytd_debit", "ytd_credit"]].sum()
     main = main.reset_index().rename(columns={"main": "account"})
     main["level"] = "main"
@@ -240,10 +264,7 @@ def trial_balance(gl: pd.DataFrame, cal, names: dict, foreign: bool) -> pd.DataF
     res["period"] = cal.months[res.m.values].astype(str)
     res["tdhp_code"] = res.account.str[:3]
     res["account_name"] = [names.get(a) or CHART[a[:3]][2 if foreign else 0] for a in res.account]
-    if foreign:
-        res["account_code"] = [CHART[a[:3]][1] + a[3:] for a in res.account]
-    else:
-        res["account_code"] = res.account
+    res["account_code"] = [CHART[a[:3]][1] + a[3:] for a in res.account] if foreign else res.account
     res["parent_code"] = [None if p is None else (CHART[p][1] if foreign else p) for p in res.parent]
     for c in ("month_debit", "month_credit", "ytd_debit", "ytd_credit"):
         res[c] = res[c].round(2)

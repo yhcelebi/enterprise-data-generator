@@ -1510,9 +1510,8 @@ class CompanySim:
 
     def closing_entries(self):
         """Close income statement accounts at each year end and carry the result to equity."""
-        gl = self.J.frame(sort=False)
-        gl = gl[gl.day <= self.last_day]
-        pl = gl[gl.account.str[0] == "6"]
+        pl_mask = np.array([a.startswith("6") for a in self.J.accounts] + [False])
+        pl = self.J.frame(sort=False, keep_part=lambda p: pl_mask[p[3]])
         year = self.ext_year[pl.day.values]
         bal = pl.assign(year=year, net=pl.debit - pl.credit).groupby(["year", "account"])["net"].sum()
         last_year = self.cal.end.year if self.cal.end.month == 12 and self.cal.end.day == 31 else self.cal.end.year - 1
@@ -1547,8 +1546,9 @@ class CompanySim:
     def gen_budget(self):
         """Annual budget prepared each December from the year's actuals, phased by month."""
         rng, cal = self.rng, self.cal
-        gl = self.J.frame(sort=False)
-        gl = gl[(gl.day <= self.last_day) & (gl.doc_type != "closing")]
+        keep = np.array([a[:2] in ("60", "61", "62", "63", "66") for a in self.J.accounts] + [False])
+        gl = self.J.frame(sort=False, keep_part=lambda p: keep[p[3]])
+        gl = gl[gl.doc_type != "closing"]
         m = self.dm[gl.day.values]
         acc2 = gl.account.str[:2]
         def monthly(prefixes, sign):
@@ -1586,8 +1586,7 @@ class CompanySim:
     # ------------------------------------------------------------------ outputs
 
     def finalize(self):
-        from .output import build_tables
-        self.tables = build_tables(self)
+        """Tables are built and written by output.iter_tables after the run (one at a time)."""
 
 
 class _ProfileProxy:

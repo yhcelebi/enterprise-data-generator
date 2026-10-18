@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 
 from .. import reference as ref
-from . import weighted_choice
+from . import blocks, weighted_choice
 
 GPS_ROW_BUDGET = 150e6
 LANES = {  # extra international destinations
@@ -146,19 +146,21 @@ def _telemetry(ctx, trucks, days, year, km_by_truck_day):
     years_kept = max(1, int(GPS_ROW_BUDGET * ctx.detail / max(rows_per_year, 1)))
     if year <= sim.cal.end.year - years_kept or year < 2008:  # fleet telematics became common around 2008
         return
-    drive = np.where(km > 0)[0]
-    pings = np.minimum(np.maximum(1, (hours[drive] * 4).astype(int)), 60)
-    owner = np.repeat(drive, pings)
-    step = np.arange(len(owner)) - np.repeat(np.cumsum(pings) - pings, pings)
-    start_h = rng.uniform(5, 9, len(drive))
-    t = sim.dates(day[owner]).astype("datetime64[s]") + ((np.repeat(start_h, pings) * 3600) + step * 900).astype("timedelta64[s]")
-    lat0 = rng.uniform(36.5, 41.5, len(drive)) if sim.tr else rng.uniform(48.5, 53.0, len(drive))
-    lon0 = rng.uniform(27, 40, len(drive)) if sim.tr else rng.uniform(3, 12, len(drive))
-    heading = rng.uniform(0, 2 * np.pi, len(drive))
-    dist = step * 0.25 * df.avg_speed_kmh.values[owner] / 111
-    ctx.w.write("truck_gps_pings", pd.DataFrame({
-        "truck_id": tid[owner], "timestamp": t,
-        "lat": np.round(np.repeat(lat0, pings) + np.sin(np.repeat(heading, pings)) * dist, 5),
-        "lon": np.round(np.repeat(lon0, pings) + np.cos(np.repeat(heading, pings)) * dist, 5),
-        "speed_kmh": np.round(np.clip(df.avg_speed_kmh.values[owner] * rng.lognormal(0, 0.2, len(owner)), 0, 95), 1),
-    }), year)
+    drive_all = np.where(km > 0)[0]
+    pings_all = np.minimum(np.maximum(1, (hours[drive_all] * 4).astype(int)), 60)
+    for blk in blocks(pings_all):
+        drive, pings = drive_all[blk], pings_all[blk]
+        owner = np.repeat(drive, pings)
+        step = np.arange(len(owner)) - np.repeat(np.cumsum(pings) - pings, pings)
+        start_h = rng.uniform(5, 9, len(drive))
+        t = sim.dates(day[owner]).astype("datetime64[s]") + ((np.repeat(start_h, pings) * 3600) + step * 900).astype("timedelta64[s]")
+        lat0 = rng.uniform(36.5, 41.5, len(drive)) if sim.tr else rng.uniform(48.5, 53.0, len(drive))
+        lon0 = rng.uniform(27, 40, len(drive)) if sim.tr else rng.uniform(3, 12, len(drive))
+        heading = rng.uniform(0, 2 * np.pi, len(drive))
+        dist = step * 0.25 * df.avg_speed_kmh.values[owner] / 111
+        ctx.w.write("truck_gps_pings", pd.DataFrame({
+            "truck_id": tid[owner], "timestamp": t,
+            "lat": np.round(np.repeat(lat0, pings) + np.sin(np.repeat(heading, pings)) * dist, 5),
+            "lon": np.round(np.repeat(lon0, pings) + np.cos(np.repeat(heading, pings)) * dist, 5),
+            "speed_kmh": np.round(np.clip(df.avg_speed_kmh.values[owner] * rng.lognormal(0, 0.2, len(owner)), 0, 95), 1),
+        }), year)

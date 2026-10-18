@@ -8,7 +8,7 @@ from pathlib import Path
 from . import detail
 from .companies import BY_ID, COMPANIES
 from .engine import CompanySim
-from .output import shared_tables, write_tables
+from .output import iter_tables, shared_tables, write_tables
 from .timeline import make_calendar
 
 
@@ -42,7 +42,8 @@ def main():
         t0 = time.time()
         seed = args.seed * 1_000_003 + zlib.crc32(cid.encode())
         sim = CompanySim(company, cal, args.scale, seed, args.seed)
-        sizes = write_tables(sim.run(), out, cid)
+        sim.run()
+        sizes = write_tables(iter_tables(sim), out, cid)
         sizes.update(detail.generate(sim, out, args.detail))
         rows = sum(r for r, _ in sizes.values())
         mb = sum(s for _, s in sizes.values()) / 1e6

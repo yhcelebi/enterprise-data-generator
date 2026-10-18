@@ -90,6 +90,19 @@ def split_exact(rng, totals: np.ndarray, counts: np.ndarray, sigma: float = 0.6)
     return np.round(parts, 2)
 
 
+def blocks(counts: np.ndarray, max_rows: int = 3_000_000):
+    """Split entities into consecutive groups whose expanded rows stay under max_rows."""
+    counts = np.asarray(counts)
+    start, acc = 0, 0
+    for i, c in enumerate(counts):
+        if acc + c > max_rows and i > start:
+            yield np.arange(start, i)
+            start, acc = i, 0
+        acc += c
+    if start < len(counts):
+        yield np.arange(start, len(counts))
+
+
 def weighted_choice(rng, weights: np.ndarray, n: int) -> np.ndarray:
     cw = np.cumsum(weights)
     return np.minimum(np.searchsorted(cw, rng.random(n) * cw[-1], side="right"), len(weights) - 1)

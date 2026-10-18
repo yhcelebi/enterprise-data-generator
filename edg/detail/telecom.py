@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 
 from .. import reference as ref
-from . import weighted_choice
+from . import blocks, weighted_choice
 
 USAGE_ROW_BUDGET = 1600e6
 ARPU_USD_2026 = {True: 9.0, False: 24.0}
@@ -119,31 +119,33 @@ def generate(ctx):
         if len(days) == 0:
             continue
         lo, hi = days[0], days[-1] + 1
-        s_a, s_b = np.maximum(a, lo), np.minimum(b, hi)
-        cnt = np.maximum(s_b - s_a, 0)
-        idx = np.repeat(np.arange(n), cnt)
-        day = np.repeat(s_a, cnt) + (np.arange(cnt.sum()) - np.repeat(np.cumsum(cnt) - cnt, cnt))
-        k = len(day)
-        if k == 0:
-            continue
-        yf = sim.ext_year[day] + sim.cal.days.dayofyear.values[np.minimum(day, sim.last_day)] / 366
-        dow = sim.cal.days.dayofweek.values[np.minimum(day, sim.last_day)]
-        weekend = dow >= 5
-        post = seg[idx] == "postpaid"
-        h = heavy[idx]
-        voice = rng.poisson(_curve(yf, YEARS, VOICE) * h * np.where(post, 1.3, 0.7) * np.where(weekend, 0.7, 1.05))
-        sms = rng.poisson(_curve(yf, YEARS, SMS) * h * np.where(post, 0.8, 1.3))
-        data_mb = np.round(_curve(yf, YEARS, DATA, log=True) * fr_factor * h * rng.lognormal(0, 0.5, k)
-                           * np.where(weekend, 1.15, 1.0), 1)
-        data_mb = np.where(yf < 2001, 0.0, np.maximum(data_mb, 0))
-        month = sim.ext_month[day]
-        roaming = (rng.random(k) < np.where(np.isin(month, [7, 8]), 0.02, 0.004)) & (yf > 1998)
-        m_idx = np.minimum(sim.month_of_day(day), n_m - 1)
-        daily_fee = fee.loc[plan_id[idx]].values * sim.P[m_idx] / 30.4
-        charge = np.round(daily_fee * np.where(post, 1.0, rng.uniform(0.6, 1.2, k)) + roaming * daily_fee * 3, 2)
-        df = pd.DataFrame({"date": sim.dates(day), "subscriber_id": idx + 1, "voice_minutes": voice.astype(np.int32),
-                           "sms": sms.astype(np.int32), "data_mb": data_mb, "roaming": roaming, "charge": charge})
-        ctx.w.write("subscriber_daily_usage", df.sort_values(["date", "subscriber_id"], kind="stable"), year)
+        s_a_all, s_b_all = np.maximum(a, lo), np.minimum(b, hi)
+        cnt_all = np.maximum(s_b_all - s_a_all, 0)
+        for ent in blocks(cnt_all):
+            cnt = cnt_all[ent]
+            idx = np.repeat(ent, cnt)
+            day = np.repeat(s_a_all[ent], cnt) + (np.arange(cnt.sum()) - np.repeat(np.cumsum(cnt) - cnt, cnt))
+            k = len(day)
+            if k == 0:
+                continue
+            yf = sim.ext_year[day] + sim.cal.days.dayofyear.values[np.minimum(day, sim.last_day)] / 366
+            dow = sim.cal.days.dayofweek.values[np.minimum(day, sim.last_day)]
+            weekend = dow >= 5
+            post = seg[idx] == "postpaid"
+            h = heavy[idx]
+            voice = rng.poisson(_curve(yf, YEARS, VOICE) * h * np.where(post, 1.3, 0.7) * np.where(weekend, 0.7, 1.05))
+            sms = rng.poisson(_curve(yf, YEARS, SMS) * h * np.where(post, 0.8, 1.3))
+            data_mb = np.round(_curve(yf, YEARS, DATA, log=True) * fr_factor * h * rng.lognormal(0, 0.5, k)
+                               * np.where(weekend, 1.15, 1.0), 1)
+            data_mb = np.where(yf < 2001, 0.0, np.maximum(data_mb, 0))
+            month = sim.ext_month[day]
+            roaming = (rng.random(k) < np.where(np.isin(month, [7, 8]), 0.02, 0.004)) & (yf > 1998)
+            m_idx = np.minimum(sim.month_of_day(day), n_m - 1)
+            daily_fee = fee.loc[plan_id[idx]].values * sim.P[m_idx] / 30.4
+            charge = np.round(daily_fee * np.where(post, 1.0, rng.uniform(0.6, 1.2, k)) + roaming * daily_fee * 3, 2)
+            df = pd.DataFrame({"date": sim.dates(day), "subscriber_id": idx + 1, "voice_minutes": voice.astype(np.int32),
+                               "sms": sms.astype(np.int32), "data_mb": data_mb, "roaming": roaming, "charge": charge})
+            ctx.w.write("subscriber_daily_usage", df.sort_values(["date", "subscriber_id"], kind="stable"), year)
         ctx.w.close_year(year)
 
     _network(ctx, subs, year_f)
