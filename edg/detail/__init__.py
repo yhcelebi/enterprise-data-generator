@@ -96,8 +96,9 @@ def weighted_choice(rng, weights: np.ndarray, n: int) -> np.ndarray:
 
 
 def generate(sim, out: Path, detail: float = 1.0) -> dict:
-    from . import airline, energy, healthcare, retail, telecom
-    modules = {"retail": retail, "telecom": telecom, "energy": energy, "airline": airline, "healthcare": healthcare}
+    from . import airline, energy, healthcare, logistics, retail, telecom
+    modules = {"retail": retail, "telecom": telecom, "energy": energy, "airline": airline, "healthcare": healthcare,
+               "logistics": logistics}
     mod = modules.get(sim.c.industry)
     if mod is None or detail <= 0:
         return {}
