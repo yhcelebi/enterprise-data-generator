@@ -97,6 +97,10 @@ def org_names(rng: np.random.Generator, country: str, n: int, sector_hint: str |
 
 # --------------------------------------------------------------------------- products
 
+# Price ranges (2026 USD) for categories that differ from the industry default, by category index.
+CATEGORY_PRICES = {"automotive": {0: (16_000, 45_000), 1: (20_000, 40_000), 2: (60_000, 140_000), 3: (40, 2_500),
+                                  4: (28_000, 60_000)}}
+
 def products(rng, company, cal, scale: float) -> pd.DataFrame:
     prof = company.profile
     n = max(12, int(prof.products * max(scale, 0.02) ** 0.35))
@@ -104,6 +108,10 @@ def products(rng, company, cal, scale: float) -> pd.DataFrame:
     cat = rng.integers(0, len(cats_en), n)
     lo, hi = prof.price_range_usd
     price = np.exp(rng.uniform(np.log(lo), np.log(hi), n))
+    # Categories with their own price range (vehicles vs spare parts).
+    for c_idx, (c_lo, c_hi) in CATEGORY_PRICES.get(company.industry, {}).items():
+        sel = cat == c_idx
+        price[sel] = np.exp(rng.uniform(np.log(c_lo), np.log(c_hi), sel.sum()))
     margin = np.clip(prof.gross_margin + rng.normal(0, 0.07, n), 0.03, 0.92)
     # Launch dates spread over the whole period; a quarter of the catalogue exists from the start.
     span = cal.n_months
