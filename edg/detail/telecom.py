@@ -11,7 +11,7 @@ import pandas as pd
 from .. import reference as ref
 from . import weighted_choice
 
-USAGE_ROW_BUDGET = 900e6
+USAGE_ROW_BUDGET = 1600e6
 ARPU_USD_2026 = {True: 9.0, False: 24.0}
 # Network generations: (technology, Turkey launch year, France launch year)
 TECH = [("2G", 1994, 1992), ("3G", 2009, 2004), ("4G", 2016, 2012), ("5G", 2026, 2020)]

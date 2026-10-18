@@ -6,7 +6,10 @@ on:
   workflow_dispatch:
     inputs:
       scale:
-        description: Size multiplier (1.0 = full set)
+        description: Company size for finance tables (0.3 = full demo set)
+        default: "0.3"
+      detail:
+        description: Industry detail volume (1.0 = full demo set, 0 = finance only)
         default: "1.0"
       first_year:
         description: First year of data
@@ -49,9 +52,11 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL && df -h /
       - run: pip install -r requirements.txt huggingface_hub
       - name: Generate
-        run: python -m edg --companies ${{ matrix.company }} --scale ${{ inputs.scale }} --first-year ${{ inputs.first_year }} --out out
+        run: python -m edg --companies ${{ matrix.company }} --scale ${{ inputs.scale }} --detail ${{ inputs.detail }} --first-year ${{ inputs.first_year }} --out out
       - name: Validate
         run: python scripts/validate.py out ${{ matrix.company }}
       - name: Upload

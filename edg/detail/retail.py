@@ -15,7 +15,7 @@ from . import split_exact, weighted_choice
 STORE_REVENUE_USD = {True: 4e6, False: 12e6}     # real 2026 USD per store per year
 BASKET_USD = {True: 22.0, False: 38.0}           # average receipt, 2026 USD
 LINES_PER_RECEIPT = 4.2
-LINE_BUDGET = 600e6                              # receipt lines at detail = 1
+LINE_BUDGET = 1200e6                             # receipt lines at detail = 1
 FORMATS = [("hypermarket", 0.10, 3.0, 9000), ("supermarket", 0.60, 1.0, 1800), ("express", 0.30, 0.4, 350)]
 FORMAT_TR = {"hypermarket": "Hipermarket", "supermarket": "Süpermarket", "express": "Ekspres"}
 HOURS = np.array([0, 0, 0, 0, 0, 0, 0, 0.2, 0.5, 0.7, 0.8, 0.9, 1.0, 0.9, 0.8, 0.8, 0.9, 1.1, 1.2, 1.1, 0.9, 0.6,
@@ -42,9 +42,24 @@ def generate(ctx):
     phys_gross = (b2c.gross - b2c.online).loc[phys_days].values
     expected_lines = (phys_gross / basket_local[sim.dm[phys_days]]).sum() * LINES_PER_RECEIPT
     share = min(1.0, LINE_BUDGET * ctx.detail / max(expected_lines, 1))
-    stores["has_receipt_detail"] = rng.random(len(stores)) < share
-    if not stores.has_receipt_detail.any():
-        stores.loc[stores.weight.idxmax(), "has_receipt_detail"] = True
+    # Pick stores in random order until their expected receipt lines reach the budget.
+    out_months = np.maximum(0, np.minimum(stores.close_month.values, n_m) - np.maximum(stores.open_month.values,
+                                                                                         cal.month_index(cal.output_start.strftime("%Y-%m"))))
+    phys = stores.store_id.values > 0
+    load = np.where(phys, stores.weight.values * out_months, 0.0)
+    expected = expected_lines * load / max(load.sum(), 1e-9)
+    chosen = np.zeros(len(stores), dtype=bool)
+    total = 0.0
+    for i in rng.permutation(np.where(phys & (load > 0))[0]):
+        if total >= share * expected_lines:
+            break
+        if total + expected[i] > 1.5 * share * expected_lines and chosen.any():
+            continue
+        chosen[i] = True
+        total += expected[i]
+    if not chosen.any():
+        chosen[np.where(phys)[0][np.argmin(np.where(load[phys] > 0, load[phys], np.inf))]] = True
+    stores["has_receipt_detail"] = chosen
     stores.loc[stores.store_id == 0, "has_receipt_detail"] = share > 0.05
 
     members = _members(ctx, stores, b2c, basket_local, share)

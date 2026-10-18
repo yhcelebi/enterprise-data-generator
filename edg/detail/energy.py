@@ -12,7 +12,7 @@ import pandas as pd
 from .. import reference as ref
 from . import weighted_choice
 
-METER_ROW_BUDGET = 500e6
+METER_ROW_BUDGET = 1000e6
 LATITUDE = {"TR": 39.0, "ES": 40.0}
 SMART_METER_YEAR = {"TR": 2016, "ES": 2011}
 # Plant types: unit size MW, first year for Turkey, first year for Spain, capacity factor

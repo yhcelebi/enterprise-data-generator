@@ -16,6 +16,38 @@ def table(name, company):
     return f"read_parquet('{out}/{name}/{company}/*.parquet')"
 
 
+TABLES = ["consumer_sales", "store_daily_sales", "pos_receipts", "pos_receipt_lines", "flights", "tickets", "claims",
+          "encounters", "invoices", "shipments", "stock_monthly", "invoice_lines", "production_orders"]
+SALES = "(select * from {invoices} where direction = 'sale')"
+# Each check returns the largest absolute difference; anything above one cent fails.
+DETAIL_CHECKS = [
+    ("duplicate sales invoice numbers", "select count(*) - count(distinct number) from " + SALES),
+    ("store days vs ledger consumer sales", """select max(abs(coalesce(a.g, 0) - b.gross)) from {consumer_sales} b
+        left join (select date, sum(gross) g from {store_daily_sales} group by 1) a using (date)"""),
+    ("receipts vs store days", """select max(abs(a.g - b.gross)) from (select store_id, date, sum(gross) g
+        from {pos_receipts} group by all) a join {store_daily_sales} b using (store_id, date)"""),
+    ("receipt lines vs receipts", """select max(abs(a.g - b.gross)) from (select receipt_id, sum(amount) g
+        from {pos_receipt_lines} group by 1) a join {pos_receipts} b using (receipt_id)"""),
+    ("flights vs ledger ticket sales", """select max(abs(coalesce(a.r, 0) - b.gross)) from {consumer_sales} b
+        left join (select date, sum(ticket_revenue) r from {flights} group by 1) a using (date)"""),
+    ("tickets vs flights", """select max(abs(a.f - b.ticket_revenue)) from (select flight_id, sum(fare) f
+        from {tickets} group by 1) a join {flights} b using (flight_id)"""),
+    ("claims vs insurer invoices", """select max(abs(a.s - b.net)) from (select invoice_number, sum(approved_amount) s
+        from {claims} group by 1) a join """ + SALES + """ b on a.invoice_number = b.number"""),
+    ("self-pay encounters vs ledger", """select max(abs(coalesce(a.s, 0) - b.gross)) from {consumer_sales} b
+        left join (select admit_date date, sum(charge) s from {encounters} where payer = 'self-pay' group by 1) a
+        using (date)"""),
+    ("shipments vs invoices", """select max(abs(a.s - b.net)) from (select invoice_number, sum(revenue) s
+        from {shipments} group by 1) a join """ + SALES + """ b on a.invoice_number = b.number"""),
+    ("stock identity", "select max(abs(opening_qty + produced_qty - sold_qty - closing_qty)) from {stock_monthly}"),
+    ("stock sold vs invoice lines", """select max(abs(s.q - l.q)) from (select period, sum(sold_qty) q
+        from {stock_monthly} group by 1) s join (select strftime(issued_on, '%Y-%m') period, sum(quantity) q
+        from {invoice_lines} group by 1) l using (period)"""),
+    ("production orders vs plan", """select max(abs(o.q - s.q)) from (select strftime(start_time, '%Y-%m') period,
+        product_id, sum(good_qty) q from {production_orders} group by all) o join (select period, product_id,
+        produced_qty q from {stock_monthly}) s using (period, product_id)"""),
+]
+
 companies = sys.argv[2:] or sorted(p.name for p in (out / "trial_balance").iterdir())
 failures = 0
 for c in companies:
@@ -36,6 +68,18 @@ for c in companies:
     failures += not ok
     print(f"unbalanced entries: {unbalanced} | trial balance max diff: {tb_diff:,.2f} | "
           f"bank vs ledger max diff: {bank_diff:,.2f} -> {'OK' if ok else 'FAIL'}")
+    detail_fail = []
+    for name, sql in DETAIL_CHECKS:
+        needed = [t for t in TABLES if "{" + t + "}" in sql]
+        if not all((out / t / c).exists() for t in needed):
+            continue
+        value = con.sql(sql.format(**{t: table(t, c) for t in needed})).fetchone()[0] or 0
+        if abs(value) > 0.01:
+            detail_fail.append(f"{name}={value:,.2f}")
+        print(f"  detail: {name}: {value:,.4f}")
+    if detail_fail:
+        failures += 1
+        print("  detail checks FAIL:", ", ".join(detail_fail))
 
     kpi = con.sql(f"""
         with dec as (select * from {tb} where level = 'main' and period like '%-12'

@@ -11,7 +11,7 @@ import pandas as pd
 from .. import reference as ref
 from . import weighted_choice
 
-GPS_ROW_BUDGET = 120e6
+GPS_ROW_BUDGET = 150e6
 LANES = {  # extra international destinations
     True: ["Mersin Port", "Kapıkule", "München", "Köln", "Milano", "Wien", "Budapest", "Bucureşti"],
     False: ["Antwerpen", "Hamburg", "Duisburg", "Lyon", "Milano", "Wien", "Warszawa", "Praha", "Barcelona"],

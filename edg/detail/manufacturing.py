@@ -17,7 +17,7 @@ import pandas as pd
 
 from . import split_exact, weighted_choice
 
-SENSOR_ROW_BUDGET = 80e6
+SENSOR_ROW_BUDGET = 160e6
 MACHINE_TYPES = {
     "manufacturing": ["CNC lathe", "CNC machining centre", "Hydraulic press", "Grinding machine", "Assembly cell",
                       "Heat treatment furnace"],
