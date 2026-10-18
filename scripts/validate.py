@@ -13,7 +13,7 @@ con = duckdb.connect()
 
 
 def table(name, company):
-    return f"read_parquet('{out}/{name}/{company}/*.parquet')"
+    return f"read_parquet('{out}/{company}/{name}/*.parquet')"
 
 
 TABLES = ["consumer_sales", "store_daily_sales", "pos_receipts", "pos_receipt_lines", "flights", "tickets", "claims",
@@ -48,7 +48,7 @@ DETAIL_CHECKS = [
         produced_qty q from {stock_monthly}) s using (period, product_id)"""),
 ]
 
-companies = sys.argv[2:] or sorted(p.name for p in (out / "trial_balance").iterdir())
+companies = sys.argv[2:] or sorted(p.name for p in out.iterdir() if (p / "trial_balance").exists())
 failures = 0
 for c in companies:
     print(f"\n=== {c}")
@@ -71,7 +71,7 @@ for c in companies:
     detail_fail = []
     for name, sql in DETAIL_CHECKS:
         needed = [t for t in TABLES if "{" + t + "}" in sql]
-        if not all((out / t / c).exists() for t in needed):
+        if not all((out / c / t).exists() for t in needed):
             continue
         value = con.sql(sql.format(**{t: table(t, c) for t in needed})).fetchone()[0] or 0
         if abs(value) > 0.01:

@@ -41,7 +41,7 @@ con = duckdb.connect()
 
 
 def read(table, where=""):
-    path = src / table / company
+    path = src / company / table
     if not path.exists():
         return pd.DataFrame()
     return con.sql(f"select * from read_parquet('{path}/*.parquet') {where}").df()
@@ -149,7 +149,7 @@ ob = read("obligations", f"where category = 'vat' and period between '{lo}' and 
 gl_vat = con.sql(f"""select strftime(posting_date, '%Y-%m') period,
         sum(case when tdhp_code = '391' and document_type = 'vat_return' then debit else 0 end) hesaplanan,
         sum(case when tdhp_code = '191' and document_type = 'vat_return' then credit else 0 end) indirilecek
-        from read_parquet('{src}/gl_journal_lines/{company}/*.parquet') group by 1""").df() if (src / "gl_journal_lines" / company).exists() else pd.DataFrame()
+        from read_parquet('{src}/{company}/gl_journal_lines/*.parquet') group by 1""").df() if (src / company / "gl_journal_lines").exists() else pd.DataFrame()
 if len(ob) and len(gl_vat):
     v = ob.merge(gl_vat, on="period", how="left").fillna(0)
     written.append(write(pd.DataFrame({"donem": v.period, "hesaplanan": tr_money(v.hesaplanan),

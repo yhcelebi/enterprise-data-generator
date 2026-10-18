@@ -16,7 +16,7 @@ from ..output import _to_arrow
 
 
 class DetailWriter:
-    """Writes detail tables as `<table>/<company>/<table>-<year>.parquet`, appending chunks."""
+    """Writes detail tables as `<company>/<table>/<table>-<year>.parquet`, appending chunks."""
 
     def __init__(self, out: Path, company_id: str):
         self.out = Path(out)
@@ -32,7 +32,7 @@ class DetailWriter:
         arrow = _to_arrow(df)
         key = (table, year)
         if key not in self.open:
-            folder = self.out / table / self.company_id
+            folder = self.out / self.company_id / table
             folder.mkdir(parents=True, exist_ok=True)
             path = folder / (f"{table}-{year}.parquet" if year is not None else f"{table}.parquet")
             self.open[key] = (pq.ParquetWriter(path, arrow.schema, compression="zstd"), path, arrow.schema)

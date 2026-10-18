@@ -10,15 +10,15 @@ import duckdb
 
 out = Path(sys.argv[1])
 con = duckdb.connect()
-links = con.sql(f"select seller, buyer from read_parquet('{out}/interco_links/*.parquet')").fetchall()
-present = {p.name for p in (out / "invoices").iterdir()}
+links = con.sql(f"select seller, buyer from read_parquet('{out}/shared/interco_links.parquet')").fetchall()
+present = {p.name for p in out.iterdir() if (p / "invoices").exists()}
 print(f"{'link':26s} {'seller':>7s} {'buyer':>7s} {'matched':>8s} {'amount diff':>11s} {'late':>5s} {'missing':>7s} "
       f"{'same pay day':>12s}")
 bad = 0
 for s, b in links:
     if s not in present or b not in present:
         continue
-    r = lambda t, c: f"read_parquet('{out}/{t}/{c}/*.parquet')"
+    r = lambda t, c: f"read_parquet('{out}/{c}/{t}/*.parquet')"
     row = con.sql(f"""
     with sc as (select code from {r('counterparties', s)} where interco_company = '{b}'),
          bc as (select code from {r('counterparties', b)} where interco_company = '{s}'),

@@ -325,7 +325,7 @@ def write_tables(tables: dict, out: Path, company_id: str | None = None) -> dict
     sizes = {}
     for name, df in (tables.items() if isinstance(tables, dict) else tables):
         if isinstance(df, _GLWriter):
-            folder = out / name / company_id
+            folder = out / company_id / name
             folder.mkdir(parents=True, exist_ok=True)
             rows, size = 0, 0
             for y, part in df.years():
@@ -337,14 +337,14 @@ def write_tables(tables: dict, out: Path, company_id: str | None = None) -> dict
             continue
         if df is None or len(df) == 0:
             continue
-        base = out / name
         if company_id is None:
+            base = out / "shared"
             base.mkdir(parents=True, exist_ok=True)
             path = base / f"{name}.parquet"
             pq.write_table(_to_arrow(df), path, compression="zstd")
             sizes[name] = (len(df), path.stat().st_size)
             continue
-        folder = base / company_id
+        folder = out / company_id / name
         folder.mkdir(parents=True, exist_ok=True)
         rows, size = 0, 0
         if name in YEARLY:

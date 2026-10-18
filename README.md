@@ -57,15 +57,15 @@ python -m venv .venv && .venv/bin/pip install -r requirements.txt
 ## Output layout
 
 ```
-out/<table>/<company_id>/<table>-<year>.parquet   # large tables, one file per year
-out/<table>/<company_id>/<table>.parquet          # other company tables
-out/<table>/<table>.parquet                       # shared tables
+out/<company_id>/<table>/<table>-<year>.parquet   # large tables, one file per year
+out/<company_id>/<table>/<table>.parquet          # other company tables
+out/shared/<table>.parquet                        # shared tables
 ```
 
 Read everything with DuckDB:
 
 ```sql
-select * from read_parquet('out/invoices/*/*.parquet') where company_id = 'ostim';
+select * from read_parquet('out/*/invoices/*.parquet') where company_id = 'ostim';
 ```
 
 ## Tables

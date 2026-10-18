@@ -1,0 +1,28 @@
+name: Re-layout dataset
+
+# Moves the Hugging Face dataset to the company-first layout (server-side copies),
+# replaces the dataset card and can make the dataset public.
+on:
+  workflow_dispatch:
+    inputs:
+      hf_repo:
+        description: Hugging Face dataset repository (owner/name)
+        required: true
+      make_public:
+        description: Make the dataset public afterwards
+        type: boolean
+        default: false
+
+jobs:
+  relayout:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - run: pip install huggingface_hub
+      - run: python scripts/relayout_hf.py ${{ inputs.hf_repo }} ${{ inputs.make_public && '--public' || '' }}
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
