@@ -333,6 +333,10 @@ ASSET_MIX = {
     "healthcare": {"building": 0.35, "machinery": 0.50, "vehicle": 0.02, "it_furniture": 0.13},
 }
 
+# Useful life overrides in years (aircraft, trucks, network equipment).
+LIFE_OVERRIDE = {("airline", "vehicle"): 20, ("logistics", "vehicle"): 8, ("energy", "machinery"): 25,
+                 ("telecom", "machinery"): 8}
+
 # Typical unit cost overrides for asset-heavy industries (aircraft, turbines, network sites).
 UNIT_COST_OVERRIDE = {("airline", "vehicle"): 60_000_000, ("energy", "machinery"): 2_000_000,
                       ("telecom", "machinery"): 250_000, ("logistics", "vehicle"): 130_000,
@@ -351,31 +355,36 @@ def fixed_assets(rng, company, cal, capex_local: np.ndarray, usd_to_local_end: f
         base = UNIT_COST_OVERRIDE.get((company.industry, cls), ASSET_CLASSES[cls][2])
         return base * usd_to_local_end * price_idx[max(month_idx, 0)]
 
-    def buy(budget, month_idx, acquired_on_months_ago=None):
+    carry = {cls: 0.0 for cls in classes}
+
+    def buy(budget, month_idx, opening=False):
+        """Buy whole units; budget that does not cover a unit carries over to later months."""
         for cls, sh in zip(classes, shares):
-            amount = budget * sh
+            amount = budget * sh + (0.0 if opening else carry[cls])
             if amount <= 0:
                 continue
             uc = unit_cost(cls, month_idx)
-            n = int(amount // uc)
-            frac = amount - n * uc
-            costs = list(np.full(n, uc) * rng.lognormal(0, 0.25, n))
-            if frac > uc * 0.05 or not costs:
-                costs.append(frac if costs else amount)
-            costs = np.array(costs)
-            costs *= amount / costs.sum()
+            n = max(1, int(round(amount / uc))) if opening else int(amount // uc)
+            if n == 0:
+                carry[cls] = amount
+                continue
+            spend = amount if opening else n * uc
+            carry[cls] = 0.0 if opening else amount - spend
+            costs = uc * rng.lognormal(0, 0.25, n)
+            costs *= spend / costs.sum()
+            life = LIFE_OVERRIDE.get((company.industry, cls), ASSET_CLASSES[cls][1]) * 12
             for c in costs:
-                age = 0 if acquired_on_months_ago is None else int(rng.integers(1, ASSET_CLASSES[cls][1] * 12))
+                age = int(rng.integers(1, life)) if opening else 0
                 rows.append((cls, month_idx - age, float(c)))
 
     # Opening stock: net book value roughly 55% of cost.
-    buy(opening_ppe_local / 0.55, 0, acquired_on_months_ago=True)
+    buy(opening_ppe_local / 0.55, 0, opening=True)
     for m in range(cal.n_months):
         if capex_local[m] > 0:
             buy(capex_local[m], m)
     df = pd.DataFrame(rows, columns=["asset_class", "acq_month", "cost"])
     df["account"] = df.asset_class.map(lambda c: ASSET_CLASSES[c][0])
-    life_years = df.asset_class.map(lambda c: ASSET_CLASSES[c][1]).values
+    life_years = df.asset_class.map(lambda c: LIFE_OVERRIDE.get((company.industry, c), ASSET_CLASSES[c][1])).values
     df["useful_life_months"] = (life_years * 12 * rng.uniform(0.8, 1.2, len(df))).astype(int)
     df["dispose_month"] = df.acq_month + df.useful_life_months
     name_idx = 3 if company.turkish else 4
