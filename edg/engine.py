@@ -361,7 +361,7 @@ class CompanySim:
             num = np.where(electronic,
                            np.char.add(np.char.add(letter.astype(str), year.astype(str)),
                                        np.char.zfill(seq.astype(str), 9)),
-                           np.char.add("A-", np.char.zfill((inv.groupby(year).cumcount().values + 1).astype(str), 6)))
+                           np.char.add("A-", np.char.zfill((np.cumsum(~electronic)).astype(str), 6)))
             inv["channel"] = channel
             inv["number"] = num.astype(object)
             ettn = np.full(len(inv), None, dtype=object)
