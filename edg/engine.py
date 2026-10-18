@@ -1168,7 +1168,7 @@ class CompanySim:
             if day < self.n_days:
                 extra[day] += amount
 
-        target = LEVERAGE[self.c.industry] * (1.2 if self.tr else 1.0) * rng.uniform(0.7, 1.3)
+        target = LEVERAGE[self.c.industry] * (0.7 if self.tr else 1.0) * rng.uniform(0.7, 1.3)
 
         eur_local = self.fx_d / self.eur_d  # local currency per EUR, daily
         eu_rate = interest_monthly(cal, "EU")
