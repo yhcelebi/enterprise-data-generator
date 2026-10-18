@@ -41,7 +41,7 @@ def main():
             continue
         t0 = time.time()
         seed = args.seed * 1_000_003 + zlib.crc32(cid.encode())
-        sim = CompanySim(company, cal, args.scale, seed)
+        sim = CompanySim(company, cal, args.scale, seed, args.seed)
         sizes = write_tables(sim.run(), out, cid)
         sizes.update(detail.generate(sim, out, args.detail))
         rows = sum(r for r, _ in sizes.values())

@@ -8,6 +8,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from .companies import COMPANIES
+from .interco import LINKS, company_tax_number
 from .ledger import CHART, chart_table, trial_balance
 
 # Large tables are split into one file per year.
@@ -30,7 +31,7 @@ def build_tables(sim) -> dict:
                       "segment": cu.segment, "supplier_category": None, "country": cu.country, "city": cu.city,
                       "payment_terms_days": cu.payment_terms_days,
                       "risk_limit": (cu.risk_limit_usd * rate_end).round(-2), "is_export": cu.is_export,
-                      "is_individual": cu.is_individual, "interco_company": None,
+                      "is_individual": cu.is_individual, "interco_company": cu.interco_company,
                       "first_seen": date(sim.month_first_day[np.clip(cu.start_month, 0, cal.n_months - 1)]),
                       "default_date": np.where(cu.default_month >= 0,
                                                date(sim.month_first_day[np.clip(cu.default_month, 0, cal.n_months - 1)]),
@@ -251,12 +252,17 @@ def shared_tables(first_year: int, end: str) -> dict:
         "export_share": c.export_share, "revenue_1995_musd_real": c.revenue_1995,
         "revenue_2026_musd_real": c.revenue_2026,
         "erp_history": "; ".join(f"{y}: {s}" for y, s in c.erp_history) or None,
+        "tax_number": company_tax_number(c.id),
     } for c in COMPANIES])
     events = pd.DataFrame([{"company_id": c.id, "month": e.month, "kind": e.kind, "size": e.size, "label": e.label}
                            for c in COMPANIES for e in c.events])
     erp = pd.DataFrame([{"company_id": c.id, "month": f"{y}-01", "kind": "erp", "size": 0.0,
                          "label": f"ERP: {s}"} for c in COMPANIES for y, s in c.erp_history])
-    return {"companies": comp, "company_events": pd.concat([events, erp], ignore_index=True).sort_values(
+    links = pd.DataFrame([{"seller": l.seller, "buyer": l.buyer, "buyer_purchase_category": l.kind,
+                           "seller_name_in_buyer_books": l.buyer_name,
+                           "buyer_name_in_seller_books": l.seller_name or None, "payment_terms_days": l.terms,
+                           "since": l.since, "holding_fee": l.fee} for l in LINKS])
+    return {"interco_links": links, "companies": comp, "company_events": pd.concat([events, erp], ignore_index=True).sort_values(
         ["company_id", "month"]), "chart_of_accounts": chart_table(), "macro_monthly": monthly, "fx_daily": fx}
 
 

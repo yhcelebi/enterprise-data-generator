@@ -262,16 +262,6 @@ SUPPLIER_KINDS = [
     ("capex", 0.05, "Makina", "Equipment"),
 ]
 
-# Suppliers that are other companies in the dataset (connected economy), with a
-# deliberately different spelling than the company's own name.
-INTERCO_SUPPLIERS = {
-    True: {"utilities": ("poyraz", "POYRAZ ENERJI AS"), "telecom_it": ("telekent", "Telekent Iletisim A.S."),
-           "logistics": ("ufuk", "UFUK LOJ. A.Ş."), "professional": ("bilge", "Bilge Yazilim AS")},
-    False: {"utilities": ("solenne", "Solenne Energia SA"), "telecom_it": ("aurore", "AURORE TELECOM"),
-            "logistics": ("meridian", "MERIDIAN FRT BV"), "professional": ("cobalt", "Cobalt Software, Inc")},
-}
-
-
 def suppliers(rng, company, scale: float) -> pd.DataFrame:
     prof = company.profile
     n = max(len(SUPPLIER_KINDS) + 4, int(prof.suppliers * max(scale, 0.01) ** 0.6))
@@ -290,10 +280,6 @@ def suppliers(rng, company, scale: float) -> pd.DataFrame:
                 foreign_country = str(rng.choice(["DE", "US", "FR", "NL", "UK"]))
                 name = org_names(rng, foreign_country, 1, en_word)[0]
             interco = ""
-            if j == 0 and kind in INTERCO_SUPPLIERS[company.turkish]:
-                other, alias = INTERCO_SUPPLIERS[company.turkish][kind]
-                if other != company.id:
-                    name, interco = alias, other
             country = foreign_country if is_foreign else company.country
             if company.turkish:
                 tax = foreign_tax_ids(rng, country, 1)[0] if is_foreign else vkn_numbers(rng, 1)[0]

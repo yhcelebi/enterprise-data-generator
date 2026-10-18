@@ -8,7 +8,7 @@ derived from that journal, so every table reconciles with every other table.
 import numpy as np
 import pandas as pd
 
-from . import masters
+from . import interco, masters
 from . import reference as ref
 from .companies import BANK_FOR, BY_ID, Company
 from .ledger import CHART, Journal, trial_balance
@@ -62,8 +62,9 @@ DESC = {  # bank statement wording: (Turkish, English)
 
 
 class CompanySim:
-    def __init__(self, company: Company, cal, scale: float, seed: int):
+    def __init__(self, company: Company, cal, scale: float, seed: int, base_seed: int = 2026):
         self.c = company
+        self.base_seed = base_seed
         self.p = company.profile
         self.cal = cal
         self.scale = scale
@@ -212,6 +213,7 @@ class CompanySim:
         self.products = masters.products(rng, c, cal, self.scale)
         self.customers = masters.customers(rng, c, cal, self.act_real, self.demand, self.scale)
         self.suppliers = masters.suppliers(rng, c, self.scale)
+        self._interco_cards()
         for code, name in zip(self.customers.code, self.customers.name):
             self.names[code] = name
         for code, name in zip(self.suppliers.code, self.suppliers.name):
@@ -221,6 +223,40 @@ class CompanySim:
         self.retail_code = "120.99.00001" if self.tr else "120"
         self.names["120.99.00001"] = "Bireysel müşteriler"
         self.names[self.bank_account] = f"{BANK_NAMES[self.bank]} {self.cur}" if self.tr else None
+
+    def _interco_cards(self):
+        """Customer cards for dataset companies we sell to, supplier cards for those we buy from."""
+        sells, buys = interco.links_for(self.c.id)
+        self.sell_links, self.buy_links = sells, buys
+        cu = self.customers
+        cu["interco_company"] = None
+        self.interco_cust = {}
+        for k, link in enumerate(sells):
+            idx = len(cu)
+            foreign = interco.country_of(link.buyer) != self.c.country
+            code = (f"120.03.{k + 1:05d}" if self.tr else f"CIC{k + 1:04d}")
+            row = {c: cu[c].iloc[0] for c in cu.columns}
+            row.update({"customer_idx": idx, "code": code, "name": link.seller_name or interco.legal_name(link.buyer),
+                        "tax_number": interco.company_tax_number(link.buyer), "is_individual": False,
+                        "segment": "key_account", "country": interco.country_of(link.buyer), "city": "",
+                        "is_export": foreign, "payment_terms_days": link.terms, "start_month": 0, "end_month": 10 ** 6,
+                        "default_month": -1, "weight": 0.0, "cheque_share": 0.0, "delay_mean": 0.0,
+                        "discount_rate": 0.0, "efatura_month": 10 ** 6, "interco_company": link.buyer})
+            cu = pd.concat([cu, pd.DataFrame([row])], ignore_index=True)
+            self.interco_cust[link.buyer] = idx
+        self.customers = cu
+        su = self.suppliers
+        self.interco_supp = {}
+        for k, link in enumerate(buys):
+            idx = len(su)
+            code = (f"320.03.{k + 1:05d}" if self.tr else f"VIC{k + 1:04d}")
+            su = pd.concat([su, pd.DataFrame([{
+                "supplier_idx": idx, "code": code, "name": link.buyer_name,
+                "tax_number": interco.company_tax_number(link.seller), "kind": link.kind,
+                "country": interco.country_of(link.seller), "interco_company": link.seller,
+                "payment_terms_days": link.terms, "weight": 0.0, "cheque_share": 0.0}])], ignore_index=True)
+            self.interco_supp[link.seller] = idx
+        self.suppliers = su
 
     def opening_balance(self):
         """Opening balance sheet at the start of the warm-up (company existed before)."""
@@ -241,6 +277,11 @@ class CompanySim:
         rng, p, cal = self.rng, self.p, self.cal
         cust, prod = self.customers, self.products
         R = self.rev_local * (1 - p.b2c_share)
+        self.sell_streams = {l.buyer: interco.link_invoices(l, cal, self.scale, self.base_seed) for l in self.sell_links}
+        for st in self.sell_streams.values():
+            if len(st):
+                R = R - np.bincount(st.m.values, weights=st.net.values, minlength=cal.n_months)
+        R = np.maximum(R, 0)
         if p.avg_invoice_usd <= 0 or R.sum() <= 0:
             self.invoices = pd.DataFrame()
             self.lines = pd.DataFrame()
@@ -341,10 +382,62 @@ class CompanySim:
         inv["fx_rate"] = np.round(rate, 6)
         inv["total_fx"] = np.where(inv.export, np.round(inv.total / inv.fx_rate, 2), inv.total)
         self._number_sales(inv)
+        inv["interco"] = False
+        inv["preset_pay_day"] = -1
+        inv["missing"] = False
+        inv, lines = self._append_interco_sales(inv, lines)
         self.invoices = inv
         self.lines = lines
         self._returns()
         self._post_sales()
+
+    def _append_interco_sales(self, inv, lines):
+        """Sales invoices to dataset companies, from the shared link stream, with product lines."""
+        rng, prod, p = self.rng, self.products, self.p
+        price_end = prod.list_price_usd_2026.values * self.fx_end
+        parts_i, parts_l = [inv], [lines]
+        next_id = len(inv)
+        for buyer, st in self.sell_streams.items():
+            st = st[st.day <= self.last_day + 400]
+            if len(st) == 0:
+                continue
+            n = len(st)
+            ids = next_id + np.arange(n)
+            next_id += n
+            k = rng.integers(1, 4, n)
+            owner = np.repeat(np.arange(n), k)
+            g = rng.gamma(1.0, size=len(owner))
+            share = g / np.bincount(owner, weights=g)[owner]
+            l_net = np.round(st.net.values[owner] * share, 2)
+            last = np.cumsum(k) - 1
+            l_net[last] += np.round(st.net.values - np.bincount(owner, weights=l_net, minlength=n), 2)
+            lm = st.m.values[owner]
+            pid = np.empty(len(owner), dtype=np.int64)
+            for mm in np.unique(lm):
+                sel = lm == mm
+                act = np.where((prod.launch_month.values <= mm) & (prod.discontinue_month.values > mm))[0]
+                pid[sel] = act[rng.integers(0, len(act), sel.sum())]
+            price = price_end[pid] * self.P_price[lm]
+            qty = np.maximum(1, np.round(l_net / price))
+            l_vat = np.round(l_net * st.vat_rate.values[owner], 2)
+            l_vat[last] += np.round(st.vat.values - np.bincount(owner, weights=l_vat, minlength=n), 2)
+            cost = np.round(l_net * (1 - p.gross_margin) * rng.lognormal(0, 0.03, len(owner)), 2)
+            cust = self.interco_cust[buyer]
+            parts_l.append(pd.DataFrame({
+                "m": lm, "inv_local": owner, "product_idx": pid, "qty": qty, "unit_price": np.round(l_net / qty, 4),
+                "disc": 0.0, "cost_base": price, "tmp": -1, "inv": ids[owner], "gross": l_net, "discount": 0.0,
+                "net": l_net, "vat_rate": st.vat_rate.values[owner], "vat": l_vat, "cost": cost}))
+            export = interco.country_of(buyer) != self.c.country
+            parts_i.append(pd.DataFrame({
+                "m": st.m.values, "day": st.day.values, "cust": cust, "export": export, "n_lines": k, "tmp": -1,
+                "inv": ids, "gross": st.net.values, "discount": 0.0, "net": st.net.values, "vat": st.vat.values,
+                "cost": np.round(np.bincount(owner, weights=cost, minlength=n), 2), "total": st.total.values,
+                "due": st.due.values, "currency": self.cur, "fx_rate": 1.0, "total_fx": st.total.values,
+                "channel": st.channel.values, "number": st.number.values, "ettn": st.ettn.values, "interco": True,
+                "preset_pay_day": st.pay_day.values, "missing": st.missing.values}))
+        inv = pd.concat(parts_i, ignore_index=True)
+        lines = pd.concat(parts_l, ignore_index=True).sort_values("inv", kind="stable").reset_index(drop=True)
+        return inv, lines
 
     def _number_sales(self, inv):
         rng, c = self.rng, self.c
@@ -355,9 +448,9 @@ class CompanySim:
             channel = np.where(efat, "e-fatura", np.where(earsiv, "e-arşiv", "kağıt"))
             channel = np.where(inv.export.values & (year >= 2019), "e-fatura (ihracat)", channel)
             prefix = c.id[:3].upper()
-            seq = inv.groupby([year, channel]).cumcount().values + 1
             electronic = channel != "kağıt"
             letter = np.where(channel == "e-arşiv", prefix[:2] + "A", prefix)
+            seq = inv.groupby([year, letter]).cumcount().values + 1   # one running series per prefix and year
             num = np.where(electronic,
                            np.char.add(np.char.add(letter.astype(str), year.astype(str)),
                                        np.char.zfill(seq.astype(str), 9)),
@@ -376,7 +469,7 @@ class CompanySim:
     def _returns(self):
         rng = self.rng
         inv = self.invoices
-        pick = (~inv.export.values) & (rng.random(len(inv)) < 0.015)
+        pick = (~inv.export.values) & (~inv.interco.values) & (rng.random(len(inv)) < 0.015)
         idx = np.where(pick)[0]
         frac = rng.uniform(0.1, 1.0, len(idx))
         r = pd.DataFrame({
@@ -781,7 +874,21 @@ class CompanySim:
                 purchases.append((kind, "630", amt * 0.5, 0.3))
                 amt = amt * 0.5
             purchases.append((kind, acct, amt, 0.3 if cat not in ("rent", "utilities", "insurance") else 0))
+        ic_rows = self._interco_purchases()
+        if len(ic_rows):
+            for kind in ic_rows.kind.unique():
+                need = np.bincount(ic_rows.m.values[ic_rows.kind.values == kind],
+                                   weights=ic_rows.net.values[ic_rows.kind.values == kind], minlength=n_m)
+                for i, (k, acct, amounts, size) in enumerate(purchases):
+                    if k == kind:
+                        purchases[i] = (k, acct, np.maximum(amounts - need, 0), size)
+                        ic_rows.loc[ic_rows.kind == kind, "account"] = acct
+                        break
+                else:
+                    ic_rows.loc[ic_rows.kind == kind, "account"] = "632"
         rows = [self._purchase_rows(kind, acct, amounts, size) for kind, acct, amounts, size in purchases]
+        if len(ic_rows):
+            rows.append(ic_rows)
         cap = self.capex_invoices
         if len(cap):
             sup = self.suppliers[self.suppliers.kind == "capex"]
@@ -790,7 +897,29 @@ class CompanySim:
             rows.append(cap[["m", "day", "supplier", "account", "net", "kind"]])
         pi = pd.concat(rows, ignore_index=True)
         pi = pi[pi.net > 0.005].sort_values(["day"], kind="stable").reset_index(drop=True)
+        pi = pi.astype({"m": np.int64, "day": np.int64, "supplier": np.int64, "net": float})
         self._finish_purchases(pi)
+
+    def _interco_purchases(self):
+        """Purchase invoices from dataset companies, from the shared link streams (buyer side)."""
+        rows = []
+        for link in self.buy_links:
+            st = interco.link_invoices(link, self.cal, self.scale, self.base_seed)
+            if len(st) == 0:
+                continue
+            st = st[~st.missing.values].copy()
+            day = st.buyer_day.values
+            rate = interco.fx_to_local(self.cal, st.currency.values[0], self.cur, day)
+            foreign = st.currency.values[0] != self.cur
+            rows.append(pd.DataFrame({
+                "m": np.clip(self.month_of_day(day), 0, self.cal.n_months - 1), "day": day,
+                "supplier": self.interco_supp[link.seller], "account": "632",
+                "net": np.round(st.net.values * rate, 2), "kind": link.kind, "preset": True,
+                "preset_number": st.number.values, "preset_ettn": st.ettn.values, "preset_channel": st.channel.values,
+                "preset_currency": st.currency.values, "preset_fx": np.where(foreign, np.round(rate, 6), 1.0),
+                "preset_vat": np.round(st.vat.values * rate, 2), "preset_total_fx": st.total.values,
+                "preset_due": st.due.values, "preset_pay_day": st.pay_day.values}))
+        return pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
 
     def _purchase_rows(self, kind, acct, amounts, size_usd_k):
         """Split monthly purchase amounts into supplier invoices."""
@@ -851,7 +980,24 @@ class CompanySim:
             pi["channel"] = "pdf"
             pi["ettn"] = None
         pi["number"] = np.array(num, dtype=object)
-        pi = pi.drop_duplicates("number").reset_index(drop=True)
+        if "preset" in pi.columns:
+            ps = pi.preset.fillna(False).values.astype(bool)
+            pi.loc[ps, "number"] = pi.loc[ps, "preset_number"].values
+            pi.loc[ps, "ettn"] = pi.loc[ps, "preset_ettn"].values
+            pi.loc[ps, "channel"] = pi.loc[ps, "preset_channel"].values
+            pi.loc[ps, "currency"] = pi.loc[ps, "preset_currency"].values
+            pi.loc[ps, "fx_rate"] = pi.loc[ps, "preset_fx"].values
+            pi.loc[ps, "vat"] = pi.loc[ps, "preset_vat"].values
+            pi.loc[ps, "total"] = np.round(pi.loc[ps, "net"].values + pi.loc[ps, "preset_vat"].values, 2)
+            pi.loc[ps, "total_fx"] = pi.loc[ps, "preset_total_fx"].values
+            pi.loc[ps, "due"] = pi.loc[ps, "preset_due"].values
+            pi["preset"] = ps
+            pi = pi.drop(columns=[c for c in pi.columns if c.startswith("preset_") and c != "preset_pay_day"])
+        else:
+            pi["preset"] = False
+            pi["preset_pay_day"] = -1
+        pi["preset_pay_day"] = pi.preset_pay_day.fillna(-1).astype(np.int64)
+        pi = pi[pi.preset.values | ~pi.number.duplicated(keep="first").values].reset_index(drop=True)
         pi["pinv"] = np.arange(len(pi))
         self.purchases = pi
         acct = self.supp_acct[pi.supplier.values]
@@ -879,6 +1025,7 @@ class CompanySim:
         delay = rng.normal(3, 5, len(pi)) + 12 * (self._stress(pi.due.values) - 1)
         pi["pay_day"] = self.biz(pi.due.values + np.maximum(delay, -5).astype(int))
         pi.loc[pi.kind == "rent", "pay_day"] = self.biz(pi.loc[pi.kind == "rent", "day"].values)
+        pi.loc[pi.preset, "pay_day"] = pi.loc[pi.preset, "preset_pay_day"].values
         pi["remaining"] = pi.total.values.copy()
 
     def settle_sales(self):
@@ -896,9 +1043,11 @@ class CompanySim:
         dm = cust.delay_mean.values[cid] * self._stress(inv.due.values)
         delay = rng.normal(dm, 4 + 0.4 * dm)
         pay_day = self.biz(inv.due.values + np.maximum(delay, -10).astype(int))
+        ic = inv.interco.values
+        pay_day = np.where(ic, inv.preset_pay_day.values, pay_day)
         default_m = cust.default_month.values[cid]
-        defaulted = (default_m >= 0) & (self.month_of_day(pay_day) >= default_m)
-        partial = (rng.random(len(inv)) < 0.08) & ~defaulted
+        defaulted = ((default_m >= 0) & (self.month_of_day(pay_day) >= default_m)) | inv.missing.values
+        partial = (rng.random(len(inv)) < 0.08) & ~defaulted & ~ic
         first_share = np.where(partial, rng.uniform(0.5, 0.9, len(inv)), 1.0)
         a1 = np.round(due_amt * first_share, 2)
         a2 = np.round(due_amt - a1, 2)
@@ -916,7 +1065,7 @@ class CompanySim:
         pays["method"] = np.where(is_cheque, "cheque", "transfer")
         pays["cust"] = pc
         self._post_receipts(pays, inv)
-        self._bad_debts(inv, due_amt, defaulted)
+        self._bad_debts(inv, due_amt, defaulted & ~inv.missing.values)
 
     def _post_receipts(self, pays, inv):
         rng, cust = self.rng, self.customers
@@ -964,7 +1113,7 @@ class CompanySim:
         endorsed_day = np.full(len(q), -1)
         endorsed_supplier = np.full(len(q), -1)
         pi = self.purchases
-        cand = pi[(pi.kind.isin(["goods", "subcontract", "capex"])) & (pi.currency == self.cur)]
+        cand = pi[(pi.kind.isin(["goods", "subcontract", "capex"])) & (pi.currency == self.cur) & ~pi.preset]
         cand_day = cand.pay_day.values
         cand_idx = cand.pinv.values
         order = np.argsort(cand_day, kind="stable")
@@ -1062,7 +1211,7 @@ class CompanySim:
         p = pi[ok].reset_index(drop=True)
         amt = amt[ok]
         cheque_p = sup.cheque_share.values[p.supplier.values] * self._cheque_era(p.pay_day.values)
-        is_cheque = (p.currency.values == self.cur) & (rng.random(len(p)) < cheque_p)
+        is_cheque = (p.currency.values == self.cur) & ~p.preset.values & (rng.random(len(p)) < cheque_p)
         acct = self.supp_acct[p.supplier.values]
         codes = sup.code.values[p.supplier.values]
         names = sup.name.values[p.supplier.values]
